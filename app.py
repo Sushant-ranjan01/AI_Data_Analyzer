@@ -1,129 +1,443 @@
 import streamlit as st
+import pandas as pd
 import matplotlib.pyplot as plt
-import seaborn as sns
+from fpdf import FPDF
+import tempfile
+import os
 
-from modules.data_loader import load_file
-from modules.analyzer import basic_info, describe_data, correlation
-from modules.visualizer import show_charts
-from modules.ai_engine import generate_insights, ask_question
-from modules.chat_memory import init_memory, add_to_memory, display_memory
+def ask_question(df, question):
+
+    q = question.lower()
+
+    # normalize words
+    q = q.replace("_", " ")
+    q = q.replace("hours", "hour")
+    q = q.replace("hrs", "hour")
+
+    numeric_cols = df.select_dtypes(include='number').columns
+    all_cols = df.columns
+
+    # create searchable column map
+    col_map = {
+        col: col.lower().replace("_", " ")
+        for col in all_cols
+    }
+
+    best_match = None
+    best_score = 0
+
+    # 🔥 UNIVERSAL MATCHING
+    for col, clean in col_map.items():
+
+        words = clean.split()
+
+        # word-level matching
+        score = sum(1 for w in words if w in q)
+
+        # substring boost
+        if clean in q:
+            score += 2
+
+        # partial match boost
+        for w in words:
+            if w in q:
+                score += 1
+
+        if score > best_score:
+            best_score = score
+            best_match = col
+
+    # ❌ no match
+    if best_score == 0:
+        return "Couldn't find a relevant column. Try using column-related words."
+
+    # =========================
+    # 🎯 NUMERIC OPERATIONS
+    # =========================
+    if best_match in numeric_cols:
+
+        if "average" in q or "mean" in q:
+            return f"The average {best_match} is {df[best_match].mean():.2f}"
+
+        if "max" in q or "highest" in q:
+            return f"The maximum {best_match} is {df[best_match].max():.2f}"
+
+        if "min" in q or "lowest" in q:
+            return f"The minimum {best_match} is {df[best_match].min():.2f}"
+
+        if "sum" in q:
+            return f"The total {best_match} is {df[best_match].sum():.2f}"
+
+        if "count" in q:
+            return f"The count of {best_match} is {df[best_match].count()}"
+
+    # =========================
+    # 🎯 CATEGORICAL ANSWERS
+    # =========================
+    else:
+
+        if "count" in q or "distribution" in q:
+            counts = df[best_match].value_counts().head(5)
+            return f"Top values in {best_match}:\n{counts.to_string()}"
+
+        if "unique" in q:
+            return f"{best_match} has {df[best_match].nunique()} unique values"
+
+    # =========================
+    # 🎯 CORRELATION
+    # =========================
+    if "correlation" in q or "relationship" in q:
+        if len(numeric_cols) > 1:
+            corr = df[numeric_cols].corr().abs()
+
+            for i in range(len(corr)):
+                corr.iloc[i, i] = 0
+
+            pair = corr.unstack().idxmax()
+            val = corr.unstack().max()
+
+            return f"The strongest relationship is between {pair[0]} and {pair[1]} (correlation {val:.2f})"
+
+    # =========================
+    # 🎯 DEFAULT RESPONSE
+    # =========================
+    return f"I found column '{best_match}'. Try asking average, max, min, count, or distribution."
 
 st.set_page_config(page_title="GenAI Data Analyst", layout="wide")
 
-st.title("GenAI Smart Data Analyst")
+st.title("GenAI Data Analyst")
 
-init_memory()
+# =========================
+# 🧭 SIDEBAR NAVIGATION
+# =========================
+page = st.sidebar.radio("Navigation", [
+    "Upload Data",
+    "Overview",
+    "Analysis",
+    "Insights",
+    "Ask Questions",
+    "Report"
+])
 
-uploaded_file = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"])
+# =========================
+# 📂 LOAD FILE
+# =========================
+if "df" not in st.session_state:
+    st.session_state.df = None
 
-if uploaded_file:
-    df = load_file(uploaded_file)
+if page == "Upload Data":
+    uploaded_file = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"])
 
-    if df is not None:
+    if uploaded_file:
+        if uploaded_file.name.endswith(".csv"):
+            st.session_state.df = pd.read_csv(uploaded_file)
+        else:
+            st.session_state.df = pd.read_excel(uploaded_file)
 
-        # =========================
-        # 📊 DATA PREVIEW (OLD UI KEPT)
-        # =========================
-        st.subheader("Data Preview")
-        st.write(df.head())
+        st.success("File uploaded successfully")
 
-        info = basic_info(df)
+# =========================
+# CHECK DATA
+# =========================
+df = st.session_state.df
 
-        st.subheader("Basic Information")
-        st.write("Shape:", info["shape"])
-        st.write("Columns:", info["columns"])
-        st.write("Missing Values:")
-        st.write(info["missing"])
+if df is None and page != "Upload Data":
+    st.warning("Please upload data first")
+    st.stop()
 
-        st.subheader("Statistical Description")
-        st.write(describe_data(df))
+# =========================
+# 📊 OVERVIEW
+# =========================
+if page == "Overview":
 
-        # =========================
-        # 🔥 CORRELATION (FIXED + GRAPH ADDED)
-        # =========================
-        st.subheader("Correlation")
+    st.subheader("Data Preview")
+    st.dataframe(df.head(), use_container_width=True)
 
-        corr = correlation(df)
+    col1, col2 = st.columns(2)
+    col1.write(f"Shape: {df.shape}")
+    col2.write(f"Columns: {list(df.columns)}")
 
-        # table (old behavior)
-        st.write(corr)
+    st.subheader("Missing Values")
+    st.write(df.isnull().sum())
 
-        # heatmap (new feature added)
-        try:
-            fig, ax = plt.subplots(figsize=(8, 5))
-            sns.heatmap(
-                corr,
-                annot=True,
-                cmap="coolwarm",
-                fmt=".2f",
-                linewidths=0.5,
-                ax=ax
-            )
-            st.pyplot(fig)
-        except:
-            st.warning("Install seaborn for heatmap: pip install seaborn")
+# =========================
+# 📈 ANALYSIS
+# =========================
+elif page == "Analysis":
 
-        # =========================
-        # 📊 CHARTS (OLD + NEW)
-        # =========================
-        show_charts(df)
+    st.subheader("Statistical Summary")
+    st.dataframe(df.describe(), use_container_width=True)
 
-        # Extra simple chart (NEW)
-        st.subheader("Quick Visualization")
+    numeric_cols = df.select_dtypes(include='number').columns
 
-        numeric_cols = df.select_dtypes(include="number").columns
+    # LINE CHART
+    st.subheader("Trend Analysis")
+    st.line_chart(df[numeric_cols])
 
-        if len(numeric_cols) > 0:
-            col = st.selectbox("Select column", numeric_cols)
+    # HEATMAP
+    st.subheader("Correlation Heatmap")
+    corr = df[numeric_cols].corr()
 
-            fig, ax = plt.subplots()
-            ax.hist(df[col], bins=20)
-            st.pyplot(fig)
+    fig, ax = plt.subplots()
+    cax = ax.matshow(corr, cmap="coolwarm")
+    fig.colorbar(cax)
 
-        # =========================
-        # 🤖 AI INSIGHTS (FIXED BULLETS)
-        # =========================
-        st.subheader("AI Generated Insights")
+    ax.set_xticks(range(len(corr.columns)))
+    ax.set_yticks(range(len(corr.columns)))
+    ax.set_xticklabels(corr.columns, rotation=90)
+    ax.set_yticklabels(corr.columns)
 
-        mode = st.selectbox("Select Mode", ["normal", "beginner", "business"])
+    st.pyplot(fig)
 
-        if st.button("Generate Insights"):
-            insights = generate_insights(df, mode)
+    # HISTOGRAM
+    st.subheader("Distribution")
+    col = st.selectbox("Select Column", numeric_cols)
 
-            for line in insights.split("\n"):
-                st.write(line)
+    fig, ax = plt.subplots()
+    ax.hist(df[col], bins=20)
+    st.pyplot(fig)
 
-        # =========================
-        # 💬 Q&A (IMPROVED BUT SAME UI)
-        # =========================
-        st.subheader("Ask Questions About Data")
+    # PIE CHART
+    st.subheader("Category Distribution")
 
-        col1, col2 = st.columns([4, 1])
+    cat_cols = df.select_dtypes(exclude='number').columns
 
-        with col1:
-            question = st.text_input("Enter your question")
+    if len(cat_cols) > 0:
+        col = st.selectbox("Select Categorical Column", cat_cols)
 
-        with col2:
-            ask_btn = st.button("Ask")
+        counts = df[col].value_counts()
 
-        if ask_btn and question:
-            answer = ask_question(df, question)
-
-            add_to_memory(question, answer)
-
-            st.subheader("Answer")
-            st.write(answer)
-
-        # Clear button (fixed)
-        if st.button("Clear Chat"):
-            st.session_state.memory = []
-            st.experimental_rerun()
-
-        # =========================
-        # 🧠 CHAT HISTORY (OLD UI)
-        # =========================
-        st.subheader("Chat History")
-        display_memory()
-
+        fig, ax = plt.subplots()
+        ax.pie(counts, labels=counts.index, autopct="%1.1f%%")
+        st.pyplot(fig)
     else:
-        st.error("Error loading file")
+        st.info("No categorical columns")
+
+# =========================
+# 🔥 INSIGHTS
+# =========================
+elif page == "Insights":
+
+    st.subheader("Key Insights")
+
+    numeric_cols = df.select_dtypes(include='number').columns
+
+    for col in numeric_cols:
+        st.write(f"• Average {col.replace('_',' ')} is {df[col].mean():.2f}")
+
+    if len(numeric_cols) > 1:
+        corr = df[numeric_cols].corr().abs()
+
+        for i in range(len(corr)):
+            corr.iloc[i, i] = 0
+
+        pair = corr.unstack().idxmax()
+        val = corr.unstack().max()
+
+        st.write(f"• Strong relationship between {pair[0]} and {pair[1]} (correlation {val:.2f})")
+
+# =========================
+# 💬 Q&A
+# =========================
+# =========================
+# 💬 ASK QUESTIONS PAGE
+# =========================
+elif page == "Ask Questions":
+
+    st.subheader("Ask Questions About Data")
+
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = []
+
+    col1, col2 = st.columns([5,1])
+
+    with col1:
+        question = st.text_input("Enter your question")
+
+    with col2:
+        ask_btn = st.button("Ask")
+
+    if ask_btn and question:
+        answer = ask_question(df, question)
+        st.session_state.chat_history.append((question, answer))
+
+    # latest answer
+    if st.session_state.chat_history:
+        st.subheader("Answer")
+        st.success(st.session_state.chat_history[-1][1])
+
+    # clear chat
+    if st.button("Clear Chat"):
+        st.session_state.chat_history = []
+        st.rerun()
+
+    # history
+    st.subheader("Chat History")
+    for q, a in reversed(st.session_state.chat_history):
+        st.write(f"**Question:** {q}")
+        st.write(f"Answer: {a}")
+# =========================
+# 📥 REPORT DOWNLOAD
+# =========================
+elif page == "Report":
+
+    st.subheader("Download Full PDF Report")
+
+    if st.button("Generate PDF Report"):
+
+        pdf = FPDF()
+        pdf.set_auto_page_break(auto=True, margin=10)
+
+        temp_dir = tempfile.gettempdir()
+
+        # =========================
+        # PAGE 1: TITLE
+        # =========================
+        pdf.add_page()
+        pdf.set_font("Arial", "B", 18)
+        pdf.cell(200, 10, "GenAI Data Analyst Report", ln=True, align="C")
+
+        pdf.ln(10)
+        pdf.set_font("Arial", size=12)
+
+        pdf.cell(200, 8, f"Shape: {df.shape}", ln=True)
+        pdf.multi_cell(0, 8, f"Columns: {', '.join(df.columns)}")
+
+        # =========================
+        # PAGE 2: INSIGHTS
+        # =========================
+        pdf.add_page()
+        pdf.set_font("Arial", "B", 14)
+        pdf.cell(200, 10, "Key Insights", ln=True)
+
+        pdf.set_font("Arial", size=11)
+
+        numeric_cols = df.select_dtypes(include='number').columns
+
+        for col in numeric_cols:
+            if "id" not in col.lower():
+                pdf.cell(200, 8, f"Average {col} = {df[col].mean():.2f}", ln=True)
+
+        # correlation insight
+        if len(numeric_cols) > 1:
+            corr = df[numeric_cols].corr().abs()
+            for i in range(len(corr)):
+                corr.iloc[i, i] = 0
+
+            pair = corr.unstack().idxmax()
+            val = corr.unstack().max()
+
+            pdf.ln(5)
+            pdf.multi_cell(0, 8,
+                f"Strongest relationship between {pair[0]} and {pair[1]} (correlation {val:.2f})"
+            )
+
+        # =========================
+        # PAGE 3: TREND (FIXED)
+        # =========================
+        valid_cols = [c for c in numeric_cols if "id" not in c.lower()]
+        top_cols = valid_cols[:3]
+
+        plt.figure(figsize=(8, 4))
+        df[top_cols].plot()
+        plt.title("Trend Analysis")
+        plt.xlabel("Index")
+        plt.ylabel("Values")
+        plt.legend()
+        plt.grid(alpha=0.3)
+
+        trend_path = os.path.join(temp_dir, "trend.png")
+        plt.savefig(trend_path, bbox_inches='tight')
+        plt.close()
+
+        pdf.add_page()
+        pdf.cell(200, 10, "Trend Analysis", ln=True)
+        pdf.image(trend_path, w=180)
+
+        # =========================
+        # PAGE 4: HEATMAP (FIXED)
+        # =========================
+        import seaborn as sns
+
+        plt.figure(figsize=(6, 5))
+        sns.heatmap(df[valid_cols].corr(), annot=True, cmap="coolwarm")
+        plt.title("Correlation Heatmap")
+
+        heatmap_path = os.path.join(temp_dir, "heatmap.png")
+        plt.savefig(heatmap_path, bbox_inches='tight')
+        plt.close()
+
+        pdf.add_page()
+        pdf.cell(200, 10, "Correlation Heatmap", ln=True)
+        pdf.image(heatmap_path, w=180)
+
+        # =========================
+        # HISTOGRAMS (ALL COLUMNS)
+        # =========================
+        for col in valid_cols:
+
+            plt.figure(figsize=(6, 4))
+            plt.hist(df[col], bins=20)
+            plt.title(f"Distribution of {col}")
+            plt.xlabel(col)
+            plt.ylabel("Frequency")
+            plt.grid(alpha=0.3)
+
+            hist_path = os.path.join(temp_dir, f"{col}.png")
+            plt.savefig(hist_path, bbox_inches='tight')
+            plt.close()
+
+            pdf.add_page()
+            pdf.set_font("Arial", "B", 12)
+            pdf.cell(200, 10, f"Distribution: {col}", ln=True)
+
+            pdf.set_font("Arial", size=10)
+            pdf.cell(200, 8,
+                f"Mean: {df[col].mean():.2f} | Min: {df[col].min():.2f} | Max: {df[col].max():.2f}",
+                ln=True
+            )
+
+            pdf.image(hist_path, w=180)
+
+        # =========================
+        # PIE CHART
+        # =========================
+        cat_cols = df.select_dtypes(exclude='number').columns
+
+        if len(cat_cols) > 0:
+            col = cat_cols[0]
+            counts = df[col].value_counts()
+
+            # 🔥 IMPORTANT FIX
+            fig, ax = plt.subplots(figsize=(5, 5))   # create fresh figure
+
+            ax.pie(counts, labels=counts.index, autopct='%1.1f%%')
+            ax.set_title(f"{col} Distribution")
+
+            pie_path = os.path.join(temp_dir, "pie.png")
+
+            fig.savefig(pie_path, format="png", bbox_inches='tight')  # force PNG
+            plt.close(fig)  # close properly
+
+            pdf.add_page()
+            pdf.cell(200, 10, f"{col} Distribution", ln=True)
+            pdf.image(pie_path, w=150)
+
+        # =========================
+        # FINAL PAGE
+        # =========================
+        pdf.add_page()
+        pdf.set_font("Arial", "B", 14)
+        pdf.cell(200, 10, "Conclusion", ln=True)
+
+        pdf.set_font("Arial", size=11)
+        pdf.multi_cell(0, 8,
+            "This report provides insights into dataset trends, distributions, and relationships. "
+            "These insights can help in understanding patterns and making informed decisions."
+        )
+
+        pdf_path = os.path.join(temp_dir, "report.pdf")
+        pdf.output(pdf_path)
+
+        with open(pdf_path, "rb") as f:
+            st.download_button("Download PDF", f, file_name="GenAI_Report.pdf")
