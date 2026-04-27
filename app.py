@@ -26,26 +26,42 @@ def ask_question(df, question):
     best_match = None
     best_score = 0
 
-    # 🔥 UNIVERSAL MATCHING
+    # 🔥 UNIVERSAL MATCHING (FIXED)
     for col, clean in col_map.items():
 
         words = clean.split()
 
-        # word-level matching
         score = sum(1 for w in words if w in q)
 
         # substring boost
         if clean in q:
             score += 2
 
-        # partial match boost
-        for w in words:
-            if w in q:
-                score += 1
-
         if score > best_score:
             best_score = score
             best_match = col
+
+    # 🔥 extra smart responses
+    if "summary" in q or "dataset" in q:
+        return f"This dataset contains {df.shape[0]} rows and {df.shape[1]} columns."
+
+    if "columns" in q:
+        return f"Columns are: {', '.join(df.columns)}"
+
+    # =========================
+    # 🎯 CORRELATION (MOVED UP)
+    # =========================
+    if "correlation" in q or "relationship" in q:
+        if len(numeric_cols) > 1:
+            corr = df[numeric_cols].corr().abs()
+
+            for i in range(len(corr)):
+                corr.iloc[i, i] = 0
+
+            pair = corr.unstack().idxmax()
+            val = corr.unstack().max()
+
+            return f"The strongest relationship is between {pair[0]} and {pair[1]} (correlation {val:.2f})"
 
     # ❌ no match
     if best_score == 0:
@@ -84,25 +100,9 @@ def ask_question(df, question):
             return f"{best_match} has {df[best_match].nunique()} unique values"
 
     # =========================
-    # 🎯 CORRELATION
-    # =========================
-    if "correlation" in q or "relationship" in q:
-        if len(numeric_cols) > 1:
-            corr = df[numeric_cols].corr().abs()
-
-            for i in range(len(corr)):
-                corr.iloc[i, i] = 0
-
-            pair = corr.unstack().idxmax()
-            val = corr.unstack().max()
-
-            return f"The strongest relationship is between {pair[0]} and {pair[1]} (correlation {val:.2f})"
-
-    # =========================
     # 🎯 DEFAULT RESPONSE
     # =========================
     return f"I found column '{best_match}'. Try asking average, max, min, count, or distribution."
-
 st.set_page_config(page_title="GenAI Data Analyst", layout="wide")
 
 st.title("GenAI Data Analyst")
@@ -150,15 +150,47 @@ if df is None and page != "Upload Data":
 # =========================
 if page == "Overview":
 
+    st.subheader("Quick Metrics")
+
+    c1, c2, c3 = st.columns(3)
+
+    c1.metric("Rows", df.shape[0])
+    c2.metric("Columns", df.shape[1])
+    c3.metric("Missing Values", df.isnull().sum().sum())
+
     st.subheader("Data Preview")
     st.dataframe(df.head(), use_container_width=True)
 
+    # =========================
+    # 🔍 DATA FILTER
+    # =========================
+    st.subheader("Filter Data")
+
+    filter_col = st.selectbox("Select column to filter", df.columns)
+    filter_val = st.text_input("Enter value to search")
+
+    filtered_df = df  # ✅ default (VERY IMPORTANT)
+
+    if filter_val:
+        filtered_df = df[df[filter_col].astype(str).str.contains(filter_val, case=False)]
+
+    st.write(f"Filtered Rows: {filtered_df.shape[0]}")
+    st.dataframe(filtered_df.head(), use_container_width=True)
     col1, col2 = st.columns(2)
     col1.write(f"Shape: {df.shape}")
-    col2.write(f"Columns: {list(df.columns)}")
+    col2.write("Columns:")
+    col2.write(list(df.columns))
 
     st.subheader("Missing Values")
-    st.write(df.isnull().sum())
+    missing = df.isnull().sum()
+    missing = missing[missing > 0]
+
+    if len(missing) > 0:
+        st.write(missing)
+    else:
+        st.success("No missing values found")
+    st.subheader("Missing Values (%)")
+    st.write((df.isnull().mean() * 100).round(2))
 
 # =========================
 # 📈 ANALYSIS
@@ -197,6 +229,17 @@ elif page == "Analysis":
     ax.hist(df[col], bins=20)
     st.pyplot(fig)
 
+    # 🔥 BOXPLOT
+    st.subheader("Boxplot Analysis")
+
+    col_box = st.selectbox("Select column for boxplot", numeric_cols)
+
+    fig, ax = plt.subplots()
+    ax.boxplot(df[col_box])
+    ax.set_title(f"Boxplot of {col_box}")
+
+    st.pyplot(fig)
+
     # PIE CHART
     st.subheader("Category Distribution")
 
@@ -223,7 +266,15 @@ elif page == "Insights":
     numeric_cols = df.select_dtypes(include='number').columns
 
     for col in numeric_cols:
-        st.write(f"• Average {col.replace('_',' ')} is {df[col].mean():.2f}")
+        avg = df[col].mean()
+        std = df[col].std()
+
+        st.write(f"• {col.replace('_',' ')} average is {avg:.2f}")
+
+        if std > avg * 0.5:
+            st.write(f"  → High variation observed in {col}")
+        else:
+            st.write(f"  → Data is relatively stable for {col}")
 
     if len(numeric_cols) > 1:
         corr = df[numeric_cols].corr().abs()
@@ -234,8 +285,14 @@ elif page == "Insights":
         pair = corr.unstack().idxmax()
         val = corr.unstack().max()
 
-        st.write(f"• Strong relationship between {pair[0]} and {pair[1]} (correlation {val:.2f})")
+        st.write(f"\n• Strongest relationship between {pair[0]} and {pair[1]} (correlation {val:.2f})")
 
+        if val > 0.7:
+            st.write("  → Strong dependency detected")
+        elif val > 0.4:
+            st.write("  → Moderate relationship")
+        else:
+            st.write("  → Weak relationship")
 # =========================
 # 💬 Q&A
 # =========================
