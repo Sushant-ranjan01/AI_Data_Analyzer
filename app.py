@@ -104,9 +104,78 @@ def ask_question(df, question):
     # =========================
     return f"I found column '{best_match}'. Try asking average, max, min, count, or distribution."
 st.set_page_config(page_title="GenAI Data Analyst", layout="wide")
+st.markdown("""
+<style>
 
-st.title("GenAI Data Analyst")
+/* ===== MAIN LAYOUT ===== */
+.block-container {
+    padding-top: 1rem;
+    max-width: 1200px;
+}
 
+/* ===== HERO ===== */
+.hero {
+    background: linear-gradient(135deg, #0f172a, #1e40af);
+    padding: 30px;
+    border-radius: 18px;
+    border: 1px solid #1f2937;
+    margin-bottom: 25px;
+}
+
+.hero-title {
+    font-size: 36px;
+    font-weight: 700;
+    color: white;
+}
+
+.hero-sub {
+    color: #cbd5f5;
+}
+
+/* ===== KPI ===== */
+.kpi {
+    background: linear-gradient(135deg, #020617, #0f172a);
+    padding: 18px;
+    border-radius: 12px;
+    border: 1px solid #1f2937;
+    text-align: center;
+}
+
+.kpi-title {
+    color: #9ca3af;
+}
+
+.kpi-value {
+    font-size: 22px;
+    font-weight: bold;
+    color: #e5e7eb;
+}
+
+/* ===== CARD ===== */
+.card {
+    background: #020617;
+    padding: 20px;
+    border-radius: 14px;
+    border: 1px solid #1f2937;
+    margin-bottom: 20px;
+}
+
+/* ===== BUTTON ===== */
+.stButton>button {
+    border-radius: 10px;
+    background: linear-gradient(90deg, #2563eb, #1d4ed8);
+    color: white;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+st.markdown("""
+<div class="hero">
+    <div class="hero-title">GenAI Data Analyst</div>
+    <div class="hero-sub">AI-powered insights, charts, and analysis</div>
+</div>
+""", unsafe_allow_html=True)
 # =========================
 # 🧭 SIDEBAR NAVIGATION
 # =========================
@@ -120,23 +189,153 @@ page = st.sidebar.radio("Navigation", [
 ])
 
 # =========================
-# 📂 LOAD FILE
+# LOAD FILE
 # =========================
 if "df" not in st.session_state:
     st.session_state.df = None
 
 if page == "Upload Data":
-    uploaded_file = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"])
 
+    # =========================
+    # 🎨 UI STYLE
+    # =========================
+    # =========================
+    # 🎨 PREMIUM UI STYLE
+    # =========================
+    st.markdown("""
+    <style>
+
+    /* Page background spacing */
+    .block-container {
+        padding-top: 2rem;
+    }
+
+    /* Header Banner */
+    .header-box {
+        background: linear-gradient(135deg, #0f172a, #1e3a8a);
+        padding: 25px;
+        border-radius: 15px;
+        text-align: center;
+        margin-bottom: 30px;
+        border: 1px solid #334155;
+    }
+
+    .header-title {
+        font-size: 40px;
+        font-weight: 700;
+        color: white;
+    }
+
+    .header-sub {
+        color: #cbd5f5;
+        font-size: 16px;
+    }
+
+    /* Upload Card */
+    .upload-card {
+        background: linear-gradient(135deg, #1e293b, #020617);
+        padding: 40px;
+        border-radius: 18px;
+        border: 1px solid #334155;
+        text-align: center;
+        transition: 0.3s ease;
+    }
+
+    .upload-card:hover {
+        border: 1px solid #3b82f6;
+        box-shadow: 0 0 20px rgba(59,130,246,0.3);
+    }
+
+    /* Title */
+    .upload-title {
+        font-size: 28px;
+        font-weight: 600;
+        margin-bottom: 10px;
+    }
+
+    /* Subtitle */
+    .upload-sub {
+        color: #94a3b8;
+        margin-bottom: 25px;
+    }
+
+    /* Success / Info spacing */
+    .stAlert {
+        border-radius: 10px;
+    }
+
+    </style>
+    """, unsafe_allow_html=True)
+
+
+    # =========================
+    # 🚀 HEADER
+    # =========================
+
+
+
+    # =========================
+    # 📦 UPLOAD CARD
+    # =========================
+    
+
+    st.markdown("""
+    <div class="card">
+        <div class="card-title">Upload Your Dataset</div>
+        <p style="color:#9ca3af;">Supports CSV, Excel, and TXT files</p>
+    </div>
+    """, unsafe_allow_html=True)
+    st.markdown('<div class="upload-sub">Supports CSV, Excel, and TXT files</div>', unsafe_allow_html=True)
+
+    uploaded_file = st.file_uploader(
+        " ",
+        type=["csv", "xlsx", "txt"],
+        label_visibility="collapsed"
+    )
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+    # =========================
+    # 🔧 FILE LOGIC (KEEP SAME)
+    # =========================
     if uploaded_file:
-        if uploaded_file.name.endswith(".csv"):
-            st.session_state.df = pd.read_csv(uploaded_file)
-        else:
-            st.session_state.df = pd.read_excel(uploaded_file)
 
-        st.success("File uploaded successfully")
+        df = None
 
-# =========================
+        try:
+            if uploaded_file.name.endswith(".csv"):
+                df = pd.read_csv(uploaded_file)
+
+            elif uploaded_file.name.endswith(".xlsx"):
+                df = pd.read_excel(uploaded_file)
+
+            elif uploaded_file.name.endswith(".txt"):
+
+                try:
+                    df = pd.read_csv(uploaded_file, sep=None, engine='python')
+
+                except:
+                    try:
+                        df = pd.read_csv(uploaded_file, sep=",", on_bad_lines='skip')
+                        st.warning("Some rows skipped due to formatting")
+
+                    except:
+                        try:
+                            df = pd.read_csv(uploaded_file, sep="\t", on_bad_lines='skip')
+                            st.warning("Some rows skipped due to formatting")
+
+                        except:
+                            st.error("Could not read TXT file. Please check format.")
+
+        except Exception as e:
+            st.error(f"Error reading file: {e}")
+
+        if df is not None:
+            st.session_state.df = df
+            st.success("File uploaded successfully")
+            st.info(f"Rows: {df.shape[0]} | Columns: {df.shape[1]}")
+            st.dataframe(df.head(), use_container_width=True)
 # CHECK DATA
 # =========================
 df = st.session_state.df
@@ -150,13 +349,36 @@ if df is None and page != "Upload Data":
 # =========================
 if page == "Overview":
 
-    st.subheader("Quick Metrics")
+    st.markdown('<div class="card">', unsafe_allow_html=True)
 
     c1, c2, c3 = st.columns(3)
 
-    c1.metric("Rows", df.shape[0])
-    c2.metric("Columns", df.shape[1])
-    c3.metric("Missing Values", df.isnull().sum().sum())
+    with c1:
+        st.markdown(f"""
+        <div class="kpi">
+            <div class="kpi-title">Rows</div>
+            <div class="kpi-value">{df.shape[0]}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with c2:
+        st.markdown(f"""
+        <div class="kpi">
+            <div class="kpi-title">Columns</div>
+            <div class="kpi-value">{df.shape[1]}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with c3:
+        st.markdown(f"""
+        <div class="kpi">
+            <div class="kpi-title">Missing</div>
+            <div class="kpi-value">{df.isnull().sum().sum()}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.markdown('</div>', unsafe_allow_html=True)
+        
 
     st.subheader("Data Preview")
     st.dataframe(df.head(), use_container_width=True)
