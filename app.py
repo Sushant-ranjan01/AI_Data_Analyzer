@@ -4,105 +4,144 @@ import matplotlib.pyplot as plt
 from fpdf import FPDF
 import tempfile
 import os
+import fitz  # PyMuPDF for PDF manipulation
 
 def ask_question(df, question):
 
     q = question.lower()
 
-    # normalize words
-    q = q.replace("_", " ")
-    q = q.replace("hours", "hour")
-    q = q.replace("hrs", "hour")
-
     numeric_cols = df.select_dtypes(include='number').columns
     all_cols = df.columns
 
-    # create searchable column map
-    col_map = {
-        col: col.lower().replace("_", " ")
-        for col in all_cols
-    }
+    # =========================
+    # 📄 PDF TEXT MODE (UNSTRUCTURED)
+    # =========================
+    if "content" in df.columns:
 
-    best_match = None
-    best_score = 0
+        if "find" in q or "search" in q:
+            results = df[df["content"].str.contains(q, case=False, na=False)]
 
-    # 🔥 UNIVERSAL MATCHING (FIXED)
+            if len(results) > 0:
+                return "Found:\n" + "\n".join(results["content"].head(5))
+            else:
+                return "No matching text found"
+
+        return "PDF detected. Try: find <keyword> or search <word>."
+
+    # =========================
+    # 🔍 CLEAN COLUMN NAMES
+    # =========================
+    col_map = {col: col.lower().replace("_", " ") for col in all_cols}
+
+    # =========================
+    # 🔍 FIND MATCHING COLUMNS
+    # =========================
+    matches = []
+
     for col, clean in col_map.items():
+        score = 0
 
-        words = clean.split()
+        for word in clean.split():
+            if word in q:
+                score += 2
 
-        score = sum(1 for w in words if w in q)
-
-        # substring boost
         if clean in q:
-            score += 2
+            score += 5
 
-        if score > best_score:
-            best_score = score
-            best_match = col
+        if score > 0:
+            matches.append((col, score))
 
-    # 🔥 extra smart responses
+    matches = sorted(matches, key=lambda x: x[1], reverse=True)
+
+    # =========================
+    # 🎯 GENERAL QUESTIONS
+    # =========================
     if "summary" in q or "dataset" in q:
-        return f"This dataset contains {df.shape[0]} rows and {df.shape[1]} columns."
+        return f"Dataset has {df.shape[0]} rows and {df.shape[1]} columns."
 
     if "columns" in q:
         return f"Columns are: {', '.join(df.columns)}"
 
     # =========================
-    # 🎯 CORRELATION (MOVED UP)
+    # 🎯 CORRELATION
     # =========================
     if "correlation" in q or "relationship" in q:
         if len(numeric_cols) > 1:
             corr = df[numeric_cols].corr().abs()
-
             for i in range(len(corr)):
                 corr.iloc[i, i] = 0
 
             pair = corr.unstack().idxmax()
             val = corr.unstack().max()
 
-            return f"The strongest relationship is between {pair[0]} and {pair[1]} (correlation {val:.2f})"
-
-    # ❌ no match
-    if best_score == 0:
-        return "Couldn't find a relevant column. Try using column-related words."
+            return f"Strongest relationship is between {pair[0]} and {pair[1]} (correlation {val:.2f})"
+        else:
+            return "Not enough numeric columns for correlation."
 
     # =========================
-    # 🎯 NUMERIC OPERATIONS
+    # ❌ NO MATCH
     # =========================
-    if best_match in numeric_cols:
-
-        if "average" in q or "mean" in q:
-            return f"The average {best_match} is {df[best_match].mean():.2f}"
-
-        if "max" in q or "highest" in q:
-            return f"The maximum {best_match} is {df[best_match].max():.2f}"
-
-        if "min" in q or "lowest" in q:
-            return f"The minimum {best_match} is {df[best_match].min():.2f}"
-
-        if "sum" in q:
-            return f"The total {best_match} is {df[best_match].sum():.2f}"
-
-        if "count" in q:
-            return f"The count of {best_match} is {df[best_match].count()}"
+    if len(matches) == 0:
+        return f"No relevant column found. Available columns: {', '.join(df.columns)}"
 
     # =========================
-    # 🎯 CATEGORICAL ANSWERS
+    # 🎯 MULTI-COLUMN OPERATIONS
     # =========================
-    else:
+    if "average" in q or "mean" in q:
+        results = [f"{col}: {df[col].mean():.2f}" for col, _ in matches if col in numeric_cols]
+        if results:
+            return "Averages:\n" + "\n".join(results[:5])
 
-        if "count" in q or "distribution" in q:
-            counts = df[best_match].value_counts().head(5)
-            return f"Top values in {best_match}:\n{counts.to_string()}"
+    if "max" in q or "highest" in q:
+        results = [f"{col}: {df[col].max():.2f}" for col, _ in matches if col in numeric_cols]
+        if results:
+            return "Maximum values:\n" + "\n".join(results[:5])
 
-        if "unique" in q:
-            return f"{best_match} has {df[best_match].nunique()} unique values"
+    if "min" in q or "lowest" in q:
+        results = [f"{col}: {df[col].min():.2f}" for col, _ in matches if col in numeric_cols]
+        if results:
+            return "Minimum values:\n" + "\n".join(results[:5])
+
+    # =========================
+    # 🔥 COMPARISON
+    # =========================
+    if "compare" in q or "difference" in q:
+        if len(matches) >= 2:
+            col1, col2 = matches[0][0], matches[1][0]
+
+            if col1 in numeric_cols and col2 in numeric_cols:
+                diff = abs(df[col1].mean() - df[col2].mean())
+                return f"Difference between average {col1} and {col2} is {diff:.2f}"
+
+        return "Please mention two numeric columns to compare."
+
+    # =========================
+    # 🎯 DISTRIBUTION
+    # =========================
+    if "count" in q or "distribution" in q:
+        best = matches[0][0]
+        counts = df[best].value_counts().head(5)
+        return f"Top values in {best}:\n{counts.to_string()}"
+
+    # =========================
+    # 🎯 UNIQUE
+    # =========================
+    if "unique" in q:
+        best = matches[0][0]
+        return f"{best} has {df[best].nunique()} unique values"
 
     # =========================
     # 🎯 DEFAULT RESPONSE
     # =========================
-    return f"I found column '{best_match}'. Try asking average, max, min, count, or distribution."
+    best = matches[0][0]
+
+    if best in numeric_cols:
+        return f"{best} → Avg: {df[best].mean():.2f}, Max: {df[best].max():.2f}, Min: {df[best].min():.2f}"
+    else:
+        return f"Column '{best}' detected. Try asking: average, max, distribution, compare."
+    
+
+
 st.set_page_config(page_title="GenAI Data Analyst", layout="wide")
 st.markdown("""
 <style>
@@ -277,10 +316,10 @@ if page == "Upload Data":
     # =========================
     # 📦 UPLOAD CARD
     # =========================
-    
+
 
     st.markdown("""
-    <div class="card">
+    <div class="upload-card">
         <div class="card-title">Upload Your Dataset</div>
         <p style="color:#9ca3af;">Supports CSV, Excel, and TXT files</p>
     </div>
@@ -289,7 +328,7 @@ if page == "Upload Data":
 
     uploaded_file = st.file_uploader(
         " ",
-        type=["csv", "xlsx", "txt"],
+        type=["csv", "xlsx", "txt", "pdf"],
         label_visibility="collapsed"
     )
 
@@ -328,6 +367,61 @@ if page == "Upload Data":
                         except:
                             st.error("Could not read TXT file. Please check format.")
 
+            elif uploaded_file.name.endswith(".pdf"):
+
+                try:
+                    uploaded_file.seek(0)
+
+                    doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
+
+                    text = ""
+                    for page in doc:
+                        text += page.get_text()
+
+                    lines = [line.strip() for line in text.split("\n") if line.strip()]
+
+                    # =========================
+                    # 🔥 DETECT FORMAT
+                    # =========================
+
+                    # CASE 1: CSV-style PDF
+                    if "," in lines[0]:
+
+                        from io import StringIO
+
+                        csv_text = "\n".join(lines)
+                        df = pd.read_csv(StringIO(csv_text))
+
+                        st.success("CSV-style PDF detected and loaded")
+
+                    # CASE 2: key:value PDF
+                    else:
+
+                        data = []
+
+                        for line in lines:
+                            row = {}
+
+                            parts = line.split(",")
+
+                            for part in parts:
+                                if ":" in part:
+                                    key, val = part.split(":", 1)
+                                    row[key.strip()] = val.strip()
+
+                            if row:
+                                data.append(row)
+
+                        df = pd.DataFrame(data)
+
+                        # convert numeric
+                        for col in df.columns:
+                            df[col] = pd.to_numeric(df[col], errors="ignore")
+
+                        st.success("Text PDF converted to structured dataset")
+
+                except Exception as e:
+                    st.error(f"Error reading PDF: {e}")
         except Exception as e:
             st.error(f"Error reading file: {e}")
 
@@ -445,38 +539,61 @@ elif page == "Analysis":
 
     # HISTOGRAM
     st.subheader("Distribution")
-    col = st.selectbox("Select Column", numeric_cols)
 
-    fig, ax = plt.subplots()
-    ax.hist(df[col], bins=20)
-    st.pyplot(fig)
+    numeric_cols = df.select_dtypes(include='number').columns
+
+    if len(numeric_cols) == 0:
+        st.warning("No numeric columns available (PDF/text data detected)")
+    else:
+        col = st.selectbox("Select Column", list(numeric_cols), key="hist_col")
+
+        if col in df.columns:
+            fig, ax = plt.subplots()
+            ax.hist(df[col].dropna(), bins=20)
+
+            ax.set_title(f"Distribution of {col}")
+            ax.set_xlabel(col)
+            ax.set_ylabel("Frequency")
+
+            st.pyplot(fig)
+
+        
 
     # 🔥 BOXPLOT
     st.subheader("Boxplot Analysis")
 
-    col_box = st.selectbox("Select column for boxplot", numeric_cols)
+    if len(numeric_cols) == 0:
+        st.warning("No numeric columns for boxplot")
+    else:
+        col_box = st.selectbox("Select column for boxplot", list(numeric_cols), key="box_col")
 
-    fig, ax = plt.subplots()
-    ax.boxplot(df[col_box])
-    ax.set_title(f"Boxplot of {col_box}")
+        if col_box in df.columns:
+            fig, ax = plt.subplots()
+            ax.boxplot(df[col_box].dropna())
 
-    st.pyplot(fig)
+            ax.set_title(f"Boxplot of {col_box}")
+
+            st.pyplot(fig)
 
     # PIE CHART
     st.subheader("Category Distribution")
 
     cat_cols = df.select_dtypes(exclude='number').columns
 
-    if len(cat_cols) > 0:
-        col = st.selectbox("Select Categorical Column", cat_cols)
-
-        counts = df[col].value_counts()
-
-        fig, ax = plt.subplots()
-        ax.pie(counts, labels=counts.index, autopct="%1.1f%%")
-        st.pyplot(fig)
+    if len(cat_cols) == 0:
+        st.info("No categorical columns available")
     else:
-        st.info("No categorical columns")
+        col_cat = st.selectbox("Select Categorical Column", list(cat_cols), key="pie_col")
+
+        if col_cat in df.columns:
+            counts = df[col_cat].value_counts().head(6)
+
+            fig, ax = plt.subplots()
+            ax.pie(counts, labels=counts.index, autopct="%1.1f%%")
+
+            ax.set_title(f"Distribution of {col_cat}")
+
+            st.pyplot(fig)
 
 # =========================
 # 🔥 INSIGHTS
@@ -487,6 +604,19 @@ elif page == "Insights":
 
     numeric_cols = df.select_dtypes(include='number').columns
 
+    # 🔥 HANDLE NO NUMERIC CASE (PDF)
+    if len(numeric_cols) == 0:
+        st.warning("No numeric data available for insights (PDF/text detected)")
+
+        # fallback insight
+        st.write(f"Dataset has {df.shape[0]} rows and {df.shape[1]} columns")
+
+        st.write("Columns available:")
+        st.write(list(df.columns))
+
+        st.info("Upload structured data (CSV/Excel) or structured PDF for full insights")
+
+        st.stop()
     for col in numeric_cols:
         avg = df[col].mean()
         std = df[col].std()
