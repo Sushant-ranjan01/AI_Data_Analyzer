@@ -1,7 +1,10 @@
 import streamlit as st
+import matplotlib.pyplot as plt
+import seaborn as sns
+
 from modules.data_loader import load_file
 from modules.analyzer import basic_info, describe_data, correlation
-from modules.visualizer import show_charts, show_correlation
+from modules.visualizer import show_charts
 from modules.ai_engine import generate_insights, ask_question
 from modules.chat_memory import init_memory, add_to_memory, display_memory
 
@@ -19,7 +22,7 @@ if uploaded_file:
     if df is not None:
 
         # =========================
-        # 📊 DATA SECTION
+        # 📊 DATA PREVIEW (OLD UI KEPT)
         # =========================
         st.subheader("Data Preview")
         st.write(df.head())
@@ -35,68 +38,92 @@ if uploaded_file:
         st.subheader("Statistical Description")
         st.write(describe_data(df))
 
+        # =========================
+        # 🔥 CORRELATION (FIXED + GRAPH ADDED)
+        # =========================
+        st.subheader("Correlation")
+
         corr = correlation(df)
-        show_correlation(corr)
-        show_charts(df)
+
+        # table (old behavior)
+        st.write(corr)
+
+        # heatmap (new feature added)
+        try:
+            fig, ax = plt.subplots(figsize=(8, 5))
+            sns.heatmap(
+                corr,
+                annot=True,
+                cmap="coolwarm",
+                fmt=".2f",
+                linewidths=0.5,
+                ax=ax
+            )
+            st.pyplot(fig)
+        except:
+            st.warning("Install seaborn for heatmap: pip install seaborn")
 
         # =========================
-        # 🤖 AI INSIGHTS
+        # 📊 CHARTS (OLD + NEW)
+        # =========================
+        show_charts(df)
+
+        # Extra simple chart (NEW)
+        st.subheader("Quick Visualization")
+
+        numeric_cols = df.select_dtypes(include="number").columns
+
+        if len(numeric_cols) > 0:
+            col = st.selectbox("Select column", numeric_cols)
+
+            fig, ax = plt.subplots()
+            ax.hist(df[col], bins=20)
+            st.pyplot(fig)
+
+        # =========================
+        # 🤖 AI INSIGHTS (FIXED BULLETS)
         # =========================
         st.subheader("AI Generated Insights")
 
         mode = st.selectbox("Select Mode", ["normal", "beginner", "business"])
 
-        if "insights" not in st.session_state:
-            st.session_state.insights = ""
-
         if st.button("Generate Insights"):
-            with st.spinner("Generating insights..."):
-                st.session_state.insights = generate_insights(df, mode)
+            insights = generate_insights(df, mode)
 
-        if st.session_state.insights:
-            st.markdown("### Key Insights")
-            st.markdown(st.session_state.insights)
+            for line in insights.split("\n"):
+                st.write(line)
 
         # =========================
-    # 💬 Q&A SECTION
-    # =========================
-    st.subheader("Ask Questions About Data")
+        # 💬 Q&A (IMPROVED BUT SAME UI)
+        # =========================
+        st.subheader("Ask Questions About Data")
 
-    if "last_question" not in st.session_state:
-        st.session_state.last_question = ""
+        col1, col2 = st.columns([4, 1])
 
-    if "current_answer" not in st.session_state:
-        st.session_state.current_answer = ""
+        with col1:
+            question = st.text_input("Enter your question")
 
-    # 👉 Better alignment
-    col1, col2 = st.columns([5,1])   # increase space for input
+        with col2:
+            ask_btn = st.button("Ask")
 
-    with col1:
-        question = st.text_input("Enter your question", key="question")
-
-    with col2:
-        st.write("")  # spacing
-        st.write("")  # push button down
-        ask_btn = st.button("Ask", use_container_width=True)
-
-    # Ask logic
-    if ask_btn:
-        if question and question != st.session_state.last_question:
+        if ask_btn and question:
             answer = ask_question(df, question)
 
             add_to_memory(question, answer)
 
-            st.session_state.last_question = question
-            st.session_state.current_answer = answer
+            st.subheader("Answer")
+            st.write(answer)
 
-    # Show answer
-    if st.session_state.current_answer:
-        st.subheader("Answer")
-        st.success(st.session_state.current_answer)
+        # Clear button (fixed)
+        if st.button("Clear Chat"):
+            st.session_state.memory = []
+            st.experimental_rerun()
 
-    # Clear chat
-    if st.button("Clear Chat"):
-        st.session_state.memory = []
-        st.session_state.last_question = ""
-        st.session_state.current_answer = ""
-        st.rerun()
+        # =========================
+        # 🧠 CHAT HISTORY (OLD UI)
+        # =========================
+        st.subheader("Chat History")
+        display_memory()
+
+    else:
+        st.error("Error loading file")
